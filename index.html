@@ -545,68 +545,155 @@
         : "Можно до " + MAX_PHOTOS + " фото";
     }
 
+    function withTimeout(promise, ms, label) {
+      return new Promise(function (resolve, reject) {
+        const timer = setTimeout(function () {
+          reject(new Error(label || "Превышено время ожидания"));
+        }, ms);
+        promise.then(
+          function (value) {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          function (err) {
+            clearTimeout(timer);
+            reject(err);
+          }
+        );
+      });
+    }
+
     function compressImage(file, maxSize, quality) {
       return new Promise(function (resolve, reject) {
+        const type = (file.type || "").toLowerCase();
+        if (type.includes("heic") || type.includes("heif") || /\.heic$/i.test(file.name || "")) {
+          // iPad HEIC often cannot be drawn to canvas in Telegram WebView
+          resolve(file);
+          return;
+        }
+
         const url = URL.createObjectURL(file);
         const img = new Image();
         img.onload = function () {
           URL.revokeObjectURL(url);
-          let { width, height } = img;
-          const scale = Math.min(1, maxSize / Math.max(width, height));
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-          const canvas = document.createElement("canvas");
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, width, height);
-          canvas.toBlob(
-            function (blob) {
-              if (!blob) {
-                reject(new Error("compress failed"));
-                return;
-              }
-              resolve(new File([blob], "photo.jpg", { type: "image/jpeg" }));
-            },
-            "image/jpeg",
-            quality
-          );
+          try {
+            let width = img.naturalWidth || img.width;
+            let height = img.naturalHeight || img.height;
+            if (!width || !height) {
+              resolve(file);
+              return;
+            }
+            const scale = Math.min(1, maxSize / Math.max(width, height));
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, width, height);
+            if (!canvas.toBlob) {
+              resolve(file);
+              return;
+            }
+            canvas.toBlob(
+              function (blob) {
+                if (!blob) {
+                  resolve(file);
+                  return;
+                }
+                resolve(new File([blob], "photo.jpg", { type: "image/jpeg" }));
+              },
+              "image/jpeg",
+              quality
+            );
+          } catch (err) {
+            resolve(file);
+          }
         };
         img.onerror = function () {
           URL.revokeObjectURL(url);
-          reject(new Error("image load failed"));
+          resolve(file);
         };
         img.src = url;
       });
     }
 
+    async function uploadOnePhoto(file, index, total) {
+      submitBtn.textContent = "Фото " + (index + 1) + "/" + total + "…";
+      const compressed = await withTimeout(
+        compressImage(file, 1280, 0.72),
+        20000,
+        "Не удалось обработать фото " + (index + 1)
+      );
+      const body = new FormData();
+      const filename = compressed.name || ("photo-" + (index + 1) + ".jpg");
+      body.append("photos", compressed, filename);
+
+      const controller = new AbortController();
+      const timer = setTimeout(function () {
+        controller.abort();
+      }, 45000);
+
+      try {
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          body: body,
+          signal: controller.signal,
+        });
+        let result = null;
+        try {
+          result = await response.json();
+        } catch (_) {
+          throw new Error("Сервер не ответил на загрузку фото. Попробуйте ещё раз через минуту.");
+        }
+        if (!response.ok || !result.ok) {
+          throw new Error((result && result.error) || "Ошибка загрузки фото " + (index + 1));
+        }
+        return (result.photos && result.photos[0]) || null;
+      } catch (err) {
+        if (err && err.name === "AbortError") {
+          throw new Error("Загрузка фото зависла. Обычно сервер на паузе — подождите 10 сек и попробуйте снова.");
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function uploadPhotos(files) {
       if (!files.length) return [];
-      const body = new FormData();
-      for (const file of files) {
-        const compressed = await compressImage(file, 1280, 0.72);
-        body.append("photos", compressed, compressed.name);
+      const ids = [];
+      for (let i = 0; i < files.length; i++) {
+        const id = await uploadOnePhoto(files[i], i, files.length);
+        if (id) ids.push(id);
       }
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        body: body,
-      });
-      const result = await response.json();
-      if (!response.ok || !result.ok) {
-        throw new Error((result && result.error) || "Ошибка загрузки фото");
+      if (!ids.length) {
+        throw new Error("Фото не удалось загрузить");
       }
-      return result.photos || [];
+      return ids;
     }
 
     photoInput.addEventListener("change", function () {
       const incoming = Array.from(photoInput.files || []);
       photoInput.value = "";
+      let skippedHeic = 0;
       for (const file of incoming) {
-        if (!file.type.startsWith("image/")) continue;
+        const type = (file.type || "").toLowerCase();
+        const name = file.name || "";
+        if (!type.startsWith("image/") && !/\.(jpe?g|png|webp|heic|heif)$/i.test(name)) {
+          continue;
+        }
         if (selectedPhotos.length >= MAX_PHOTOS) break;
+        // Prefer JPEG/PNG/WebP; still allow HEIC but warn
+        if (type.includes("heic") || type.includes("heif") || /\.heic$/i.test(name)) {
+          skippedHeic += 1;
+        }
         selectedPhotos.push(file);
       }
       renderPhotos();
+      if (skippedHeic) {
+        showError("Есть HEIC-фото с iPhone/iPad. Лучше выбрать «Самое совместимое»/JPEG, иначе загрузка может не пройти.");
+      }
     });
 
     form.addEventListener("submit", async function (event) {
@@ -628,6 +715,7 @@
 
       try {
         const photoIds = await uploadPhotos(selectedPhotos);
+        submitBtn.textContent = "Отправка…";
         const data = {
           brand_model: form.brand_model.value.trim(),
           year: form.year.value.trim(),

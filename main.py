@@ -12,6 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BufferedInputFile,
+    InputMediaDocument,
     InputMediaPhoto,
     KeyboardButton,
     Message,
@@ -55,7 +56,15 @@ ROOT = Path(__file__).resolve().parent
 UPLOAD_DIR = ROOT / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
+ALLOWED_PHOTO_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/jpg",
+    "image/heic",
+    "image/heif",
+    "application/octet-stream",
+}
 MAX_PHOTOS = 10
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
@@ -257,8 +266,31 @@ async def handle_webapp_data(message: Message) -> None:
     await message.answer("✅ Ваше объявление успешно отправлено на модерацию!")
 
 
+def _guess_ext(filename: str, content_type: str, data: bytes) -> str:
+    name = (filename or "").lower()
+    ctype = (content_type or "").lower()
+    if name.endswith(".png") or "png" in ctype:
+        return ".png"
+    if name.endswith(".webp") or "webp" in ctype:
+        return ".webp"
+    if name.endswith(".heic") or "heic" in ctype:
+        return ".heic"
+    if name.endswith(".heif") or "heif" in ctype:
+        return ".heif"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    return ".jpg"
+
+
 async def handle_upload(request: web.Request) -> web.Response:
-    reader = await request.multipart()
+    try:
+        reader = await request.multipart()
+    except Exception:
+        logger.exception("Invalid multipart upload")
+        return web.json_response({"ok": False, "error": "Некорректный запрос загрузки"}, status=400)
+
     saved: list[str] = []
 
     while True:
@@ -271,11 +303,7 @@ async def handle_upload(request: web.Request) -> web.Response:
             break
 
         content_type = (part.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if content_type not in ALLOWED_PHOTO_TYPES:
-            return web.json_response(
-                {"ok": False, "error": f"Неподдерживаемый тип файла: {content_type or 'unknown'}"},
-                status=400,
-            )
+        filename = part.filename or ""
 
         data = await part.read(decode=False)
         if not data:
@@ -286,15 +314,24 @@ async def handle_upload(request: web.Request) -> web.Response:
                 status=400,
             )
 
-        ext = ".jpg"
-        if "png" in content_type:
-            ext = ".png"
-        elif "webp" in content_type:
-            ext = ".webp"
+        # Accept empty/unknown types from mobile browsers if payload looks like an image
+        looks_like_image = (
+            data[:3] == b"\xff\xd8\xff"
+            or data[:8] == b"\x89PNG\r\n\x1a\n"
+            or data[:4] == b"RIFF"
+            or b"ftyp" in data[:32]
+        )
+        if content_type and content_type not in ALLOWED_PHOTO_TYPES and not looks_like_image:
+            return web.json_response(
+                {"ok": False, "error": f"Неподдерживаемый тип файла: {content_type}"},
+                status=400,
+            )
 
-        filename = f"{uuid.uuid4().hex}{ext}"
-        (UPLOAD_DIR / filename).write_bytes(data)
-        saved.append(filename)
+        ext = _guess_ext(filename, content_type, data)
+        out_name = f"{uuid.uuid4().hex}{ext}"
+        (UPLOAD_DIR / out_name).write_bytes(data)
+        saved.append(out_name)
+        logger.info("Uploaded photo %s (%s bytes)", out_name, len(data))
 
     if not saved:
         return web.json_response({"ok": False, "error": "Фото не получены"}, status=400)
