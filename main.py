@@ -1,11 +1,18 @@
+import asyncio
 import json
 import logging
 import os
+import uuid
 from html import escape
+from pathlib import Path
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    BufferedInputFile,
+    InputMediaPhoto,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -18,6 +25,9 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 WEBAPP_URL = os.getenv("WEBAPP_URL")
+HOST = os.getenv("HOST", "127.0.0.1")
+PORT = int(os.getenv("PORT", "8080"))
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set in .env")
@@ -33,6 +43,21 @@ try:
     ADMIN_CHAT_ID = int(ADMIN_ID)
 except ValueError as exc:
     raise RuntimeError("ADMIN_ID must be a numeric Telegram user/chat id") from exc
+
+if not PUBLIC_BASE_URL:
+    # Derive public origin from WEBAPP_URL (…/index.html → origin)
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(WEBAPP_URL)
+    PUBLIC_BASE_URL = f"{parts.scheme}://{parts.netloc}"
+
+ROOT = Path(__file__).resolve().parent
+UPLOAD_DIR = ROOT / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp", "image/jpg"}
+MAX_PHOTOS = 10
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,6 +103,10 @@ def format_listing(data: dict, username: str | None) -> str:
     if bargain != "—":
         price_line += f" · Торг/обмен: {escape(bargain)}"
 
+    photos = data.get("photos") or []
+    photo_count = len(photos) if isinstance(photos, list) else 0
+    photos_line = f"\n🖼 Фото: {photo_count} шт." if photo_count else ""
+
     return (
         f"🚗 <b>{escape(_val(data, 'brand_model'))}</b>\n"
         f"📅 Год: {escape(_val(data, 'year'))}\n"
@@ -100,16 +129,76 @@ def format_listing(data: dict, username: str | None) -> str:
         f"✨ <b>Комплектация</b>\n{escape(_val(data, 'equipment'))}\n\n"
         f"➕ <b>Дополнительно</b>\n{escape(_val(data, 'extra'))}\n\n"
         f"📞 <b>Контакты</b>\n{contacts_line}"
+        f"{photos_line}"
     )
+
+
+def resolve_photo_paths(photo_ids: list) -> list[Path]:
+    paths: list[Path] = []
+    for item in photo_ids[:MAX_PHOTOS]:
+        name = str(item).strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            continue
+        path = UPLOAD_DIR / name
+        if path.is_file():
+            paths.append(path)
+    return paths
+
+
+async def send_listing_to_admin(listing_html: str, photo_paths: list[Path]) -> None:
+    await bot.send_message(ADMIN_CHAT_ID, listing_html, parse_mode="HTML")
+    if not photo_paths:
+        return
+
+    media: list[InputMediaPhoto] = []
+    # Keep file handles open until send completes
+    files = []
+    try:
+        for path in photo_paths:
+            data = path.read_bytes()
+            files.append(data)
+            media.append(
+                InputMediaPhoto(
+                    media=BufferedInputFile(data, filename=path.name),
+                )
+            )
+        # Telegram media groups are max 10
+        await bot.send_media_group(ADMIN_CHAT_ID, media=media)
+    finally:
+        files.clear()
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else "—"
+    is_admin = message.from_user and message.from_user.id == ADMIN_CHAT_ID
+    admin_hint = (
+        "✅ Вы админ — объявления будут приходить сюда."
+        if is_admin
+        else (
+            f"ℹ️ Ваш Telegram ID: <code>{user_id}</code>\n"
+            f"Сейчас ADMIN_ID в .env = <code>{ADMIN_CHAT_ID}</code>.\n"
+            "Админ должен один раз нажать /start у этого бота, "
+            "иначе модерация не дойдёт (ошибка chat not found)."
+        )
+    )
     await message.answer(
         "Привет! 👋\n\n"
         "Я помогу оформить объявление о продаже автомобиля.\n"
-        "Нажмите кнопку ниже, заполните форму — и объявление уйдёт на модерацию.",
+        "Нажмите кнопку ниже, заполните форму — и объявление уйдёт на модерацию.\n\n"
+        f"{admin_hint}",
         reply_markup=webapp_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("myid"))
+async def cmd_myid(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else "—"
+    await message.answer(
+        f"Ваш Telegram ID: <code>{user_id}</code>\n"
+        f"ADMIN_ID в боте: <code>{ADMIN_CHAT_ID}</code>",
+        parse_mode="HTML",
     )
 
 
@@ -133,13 +222,31 @@ async def handle_webapp_data(message: Message) -> None:
         f"{escape(sender.full_name) if sender else '—'}"
         f" (id: {sender.id if sender else '—'})"
     )
+    photo_ids = data.get("photos") if isinstance(data.get("photos"), list) else []
+    photo_paths = resolve_photo_paths(photo_ids)
 
     try:
-        await bot.send_message(
-            ADMIN_CHAT_ID,
-            listing + sender_line,
+        await send_listing_to_admin(listing + sender_line, photo_paths)
+    except TelegramBadRequest as exc:
+        logger.exception("Failed to send listing to admin")
+        await message.answer(
+            "❌ Не удалось отправить объявление админу.\n\n"
+            f"Причина Telegram: <code>{escape(exc.message)}</code>\n\n"
+            f"ADMIN_ID сейчас: <code>{ADMIN_CHAT_ID}</code>\n"
+            f"Ваш ID: <code>{sender.id if sender else '—'}</code>\n\n"
+            "Что сделать:\n"
+            "1) Админ должен открыть этого бота и нажать /start\n"
+            "2) Проверить, что ADMIN_ID совпадает с ID из /myid у админа",
             parse_mode="HTML",
         )
+        return
+    except TelegramForbiddenError:
+        logger.exception("Bot forbidden to message admin")
+        await message.answer(
+            "❌ Бот не может писать админу (заблокирован или нет диалога).\n"
+            "Админ должен нажать /start у бота."
+        )
+        return
     except Exception:
         logger.exception("Failed to send listing to admin")
         await message.answer(
@@ -150,12 +257,78 @@ async def handle_webapp_data(message: Message) -> None:
     await message.answer("✅ Ваше объявление успешно отправлено на модерацию!")
 
 
+async def handle_upload(request: web.Request) -> web.Response:
+    reader = await request.multipart()
+    saved: list[str] = []
+
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        if part.name != "photos":
+            continue
+        if len(saved) >= MAX_PHOTOS:
+            break
+
+        content_type = (part.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type not in ALLOWED_PHOTO_TYPES:
+            return web.json_response(
+                {"ok": False, "error": f"Неподдерживаемый тип файла: {content_type or 'unknown'}"},
+                status=400,
+            )
+
+        data = await part.read(decode=False)
+        if not data:
+            continue
+        if len(data) > MAX_UPLOAD_BYTES:
+            return web.json_response(
+                {"ok": False, "error": "Файл слишком большой (макс. 8 МБ)"},
+                status=400,
+            )
+
+        ext = ".jpg"
+        if "png" in content_type:
+            ext = ".png"
+        elif "webp" in content_type:
+            ext = ".webp"
+
+        filename = f"{uuid.uuid4().hex}{ext}"
+        (UPLOAD_DIR / filename).write_bytes(data)
+        saved.append(filename)
+
+    if not saved:
+        return web.json_response({"ok": False, "error": "Фото не получены"}, status=400)
+
+    return web.json_response({"ok": True, "photos": saved})
+
+
+async def handle_index(_: web.Request) -> web.FileResponse:
+    return web.FileResponse(ROOT / "index.html")
+
+
+def create_http_app() -> web.Application:
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES * MAX_PHOTOS + 1024 * 1024)
+    app.router.add_get("/", handle_index)
+    app.router.add_get("/index.html", handle_index)
+    app.router.add_post("/api/upload", handle_upload)
+    app.router.add_static("/uploads/", path=str(UPLOAD_DIR), name="uploads")
+    return app
+
+
 async def main() -> None:
+    app = create_http_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, HOST, PORT)
+    await site.start()
+    logger.info("HTTP server on http://%s:%s (public base %s)", HOST, PORT, PUBLIC_BASE_URL)
     logger.info("Bot starting…")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())

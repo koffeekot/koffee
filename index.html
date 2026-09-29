@@ -218,6 +218,69 @@
       display: block;
     }
 
+    .photo-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 14px;
+      cursor: pointer;
+    }
+
+    .photo-btn input {
+      display: none;
+    }
+
+    .photo-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .photo-item {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+    }
+
+    .photo-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .photo-item button {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 26px;
+      height: 26px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.65);
+      color: #fff;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .photo-meta {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
     @media (max-width: 380px) {
       .row,
       .checks {
@@ -374,6 +437,16 @@
     </section>
 
     <section class="section">
+      <div class="section-title">Фото</div>
+      <label class="photo-btn">
+        📷 Добавить фото
+        <input type="file" id="photo-input" accept="image/*" multiple />
+      </label>
+      <div class="photo-meta" id="photo-meta">Можно до 10 фото</div>
+      <div class="photo-grid" id="photo-grid"></div>
+    </section>
+
+    <section class="section">
       <div class="section-title">Контакты</div>
       <label>
         Дополнительно
@@ -413,6 +486,11 @@
     const form = document.getElementById("car-form");
     const errorBox = document.getElementById("form-error");
     const submitBtn = document.getElementById("submit-btn");
+    const photoInput = document.getElementById("photo-input");
+    const photoGrid = document.getElementById("photo-grid");
+    const photoMeta = document.getElementById("photo-meta");
+    const MAX_PHOTOS = 10;
+    const selectedPhotos = [];
 
     function showError(message) {
       errorBox.textContent = message;
@@ -442,41 +520,101 @@
       return parts.join(", ");
     }
 
-    form.addEventListener("submit", function (event) {
+    function renderPhotos() {
+      photoGrid.innerHTML = "";
+      selectedPhotos.forEach((file, index) => {
+        const item = document.createElement("div");
+        item.className = "photo-item";
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(file);
+        img.alt = "Фото " + (index + 1);
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.setAttribute("aria-label", "Удалить фото");
+        removeBtn.textContent = "×";
+        removeBtn.addEventListener("click", function () {
+          selectedPhotos.splice(index, 1);
+          renderPhotos();
+        });
+        item.appendChild(img);
+        item.appendChild(removeBtn);
+        photoGrid.appendChild(item);
+      });
+      photoMeta.textContent = selectedPhotos.length
+        ? "Выбрано: " + selectedPhotos.length + " / " + MAX_PHOTOS
+        : "Можно до " + MAX_PHOTOS + " фото";
+    }
+
+    function compressImage(file, maxSize, quality) {
+      return new Promise(function (resolve, reject) {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          let { width, height } = img;
+          const scale = Math.min(1, maxSize / Math.max(width, height));
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(
+            function (blob) {
+              if (!blob) {
+                reject(new Error("compress failed"));
+                return;
+              }
+              resolve(new File([blob], "photo.jpg", { type: "image/jpeg" }));
+            },
+            "image/jpeg",
+            quality
+          );
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(url);
+          reject(new Error("image load failed"));
+        };
+        img.src = url;
+      });
+    }
+
+    async function uploadPhotos(files) {
+      if (!files.length) return [];
+      const body = new FormData();
+      for (const file of files) {
+        const compressed = await compressImage(file, 1280, 0.72);
+        body.append("photos", compressed, compressed.name);
+      }
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: body,
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error((result && result.error) || "Ошибка загрузки фото");
+      }
+      return result.photos || [];
+    }
+
+    photoInput.addEventListener("change", function () {
+      const incoming = Array.from(photoInput.files || []);
+      photoInput.value = "";
+      for (const file of incoming) {
+        if (!file.type.startsWith("image/")) continue;
+        if (selectedPhotos.length >= MAX_PHOTOS) break;
+        selectedPhotos.push(file);
+      }
+      renderPhotos();
+    });
+
+    form.addEventListener("submit", async function (event) {
       event.preventDefault();
       clearError();
 
       if (!form.reportValidity()) {
         showError("Заполните обязательные поля.");
-        return;
-      }
-
-      const data = {
-        brand_model: form.brand_model.value.trim(),
-        year: form.year.value.trim(),
-        price: form.price.value.trim(),
-        bargain: form.bargain.value,
-        location: form.location.value.trim(),
-        mileage: form.mileage.value.trim(),
-        engine: form.engine.value,
-        engine_mod: form.engine_mod.value.trim(),
-        power: form.power.value.trim(),
-        transmission: form.transmission.value,
-        drive: form.drive.value,
-        body: form.body.value,
-        color: form.color.value.trim(),
-        stk: formatStk(form.stk.value),
-        service: form.service.value.trim(),
-        condition: form.condition.value,
-        history: form.history.value.trim(),
-        equipment: collectEquipment(),
-        extra: form.extra.value.trim(),
-        contacts: form.contacts.value.trim(),
-      };
-
-      const payload = JSON.stringify(data);
-      if (payload.length > 4096) {
-        showError("Слишком много текста. Сократите комплектацию или описание.");
         return;
       }
 
@@ -486,11 +624,47 @@
       }
 
       submitBtn.disabled = true;
+      submitBtn.textContent = selectedPhotos.length ? "Загрузка фото…" : "Отправка…";
+
       try {
+        const photoIds = await uploadPhotos(selectedPhotos);
+        const data = {
+          brand_model: form.brand_model.value.trim(),
+          year: form.year.value.trim(),
+          price: form.price.value.trim(),
+          bargain: form.bargain.value,
+          location: form.location.value.trim(),
+          mileage: form.mileage.value.trim(),
+          engine: form.engine.value,
+          engine_mod: form.engine_mod.value.trim(),
+          power: form.power.value.trim(),
+          transmission: form.transmission.value,
+          drive: form.drive.value,
+          body: form.body.value,
+          color: form.color.value.trim(),
+          stk: formatStk(form.stk.value),
+          service: form.service.value.trim(),
+          condition: form.condition.value,
+          history: form.history.value.trim(),
+          equipment: collectEquipment(),
+          extra: form.extra.value.trim(),
+          contacts: form.contacts.value.trim(),
+          photos: photoIds,
+        };
+
+        const payload = JSON.stringify(data);
+        if (payload.length > 4096) {
+          showError("Слишком много текста. Сократите комплектацию или описание.");
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Отправить";
+          return;
+        }
+
         tg.sendData(payload);
       } catch (err) {
         submitBtn.disabled = false;
-        showError("Не удалось отправить данные. Откройте Mini App через кнопку бота.");
+        submitBtn.textContent = "Отправить";
+        showError(err && err.message ? err.message : "Не удалось отправить объявление.");
       }
     });
   </script>
