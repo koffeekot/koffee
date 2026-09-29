@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Создать объявление</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: #0e1621;
+      --surface: #17212b;
+      --surface-2: #1e2a36;
+      --border: #243447;
+      --text: #f5f7fa;
+      --muted: #8b9aab;
+      --accent: #2aabee;
+      --accent-pressed: #1f92cf;
+      --danger: #e53935;
+      --radius: 14px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+    }
+
+    body {
+      padding: 16px 16px calc(28px + env(safe-area-inset-bottom));
+    }
+
+    .header {
+      margin-bottom: 18px;
+    }
+
+    .header h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .header p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .section-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    label .req::after {
+      content: " *";
+      color: var(--danger);
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="tel"],
+    input[type="month"],
+    select,
+    textarea {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font: inherit;
+      font-size: 1rem;
+      padding: 12px 14px;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      transition: border-color 0.15s ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+    }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238b9aab' d='M1.4.6 6 5.2 10.6.6 12 2 6 8 0 2z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 36px;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+      line-height: 1.4;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .checks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 0.86rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .check input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .submit-wrap {
+      position: sticky;
+      bottom: 0;
+      padding-top: 8px;
+      background: linear-gradient(transparent, var(--bg) 28%);
+    }
+
+    button[type="submit"] {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 16px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(42, 171, 238, 0.28);
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+
+    button[type="submit"]:active {
+      background: var(--accent-pressed);
+      transform: scale(0.985);
+    }
+
+    button[type="submit"]:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .hint {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-top: 8px;
+    }
+
+    .error {
+      display: none;
+      background: rgba(229, 57, 53, 0.12);
+      border: 1px solid rgba(229, 57, 53, 0.35);
+      color: #ff8a80;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 0.88rem;
+    }
+
+    .error.show {
+      display: block;
+    }
+
+    @media (max-width: 380px) {
+      .row,
+      .checks {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🚗 Новое объявление</h1>
+    <p>Заполните данные авто — объявление уйдёт на модерацию.</p>
+  </div>
+
+  <div id="form-error" class="error" role="alert"></div>
+
+  <form id="car-form" novalidate>
+    <section class="section">
+      <div class="section-title">Основное</div>
+      <label>
+        <span class="req">Марка и модель</span>
+        <input type="text" name="brand_model" placeholder="например Škoda Octavia" required />
+      </label>
+      <div class="row">
+        <label>
+          <span class="req">Год выпуска</span>
+          <input type="number" name="year" min="1950" max="2100" placeholder="2019" required />
+        </label>
+        <label>
+          <span class="req">Цена, CZK</span>
+          <input type="number" name="price" min="0" step="1" placeholder="295000" required />
+        </label>
+      </div>
+      <label>
+        Торг / Возможен обмен
+        <select name="bargain">
+          <option value="Да">Да</option>
+          <option value="Нет" selected>Нет</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>
+          <span class="req">Локация</span>
+          <input type="text" name="location" placeholder="Praha" required />
+        </label>
+        <label>
+          Пробег
+          <input type="text" name="mileage" placeholder="145 000 км" />
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">Двигатель и кузов</div>
+      <label>
+        Двигатель
+        <select name="engine">
+          <option value="Бензин">Бензин</option>
+          <option value="Дизель">Дизель</option>
+          <option value="Газ">Газ</option>
+          <option value="Гибрид">Гибрид</option>
+          <option value="Электро">Электро</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>
+          Объем / модификация
+          <input type="text" name="engine_mod" placeholder="2.0 TDI" />
+        </label>
+        <label>
+          Мощность
+          <input type="text" name="power" placeholder="150 л.с. / 110 кВт" />
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Коробка передач
+          <select name="transmission">
+            <option value="Автомат">Автомат</option>
+            <option value="Механика">Механика</option>
+          </select>
+        </label>
+        <label>
+          Привод
+          <select name="drive">
+            <option value="Передний">Передний</option>
+            <option value="Задний">Задний</option>
+            <option value="Полный">Полный</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Кузов
+          <select name="body">
+            <option value="Седан">Седан</option>
+            <option value="Универсал">Универсал</option>
+            <option value="Хэтчбек">Хэтчбек</option>
+            <option value="Кроссовер">Кроссовер</option>
+            <option value="Купе">Купе</option>
+            <option value="Кабриолет">Кабриолет</option>
+            <option value="Минивэн">Минивэн</option>
+          </select>
+        </label>
+        <label>
+          Цвет
+          <input type="text" name="color" placeholder="Чёрный металлик" />
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">Состояние</div>
+      <label>
+        Техосмотр (STK) до
+        <input type="month" name="stk" />
+      </label>
+      <label>
+        Состояние
+        <select name="condition">
+          <option value="Отличное">Отличное</option>
+          <option value="На полном ходу" selected>На полном ходу</option>
+          <option value="Требует вложений">Требует вложений</option>
+        </select>
+      </label>
+      <label>
+        История
+        <input type="text" name="history" placeholder="Без ДТП, 2 владельца" />
+      </label>
+      <label>
+        Обслуживание
+        <textarea name="service" placeholder="ТО по регламенту, замена ГРМ в 2023…"></textarea>
+      </label>
+    </section>
+
+    <section class="section">
+      <div class="section-title">Комплектация</div>
+      <div class="checks" id="equipment-checks">
+        <label class="check"><input type="checkbox" value="Климат-контроль" />Климат-контроль</label>
+        <label class="check"><input type="checkbox" value="Круиз-контроль" />Круиз-контроль</label>
+        <label class="check"><input type="checkbox" value="Камера заднего вида" />Камера</label>
+        <label class="check"><input type="checkbox" value="Парктроники" />Парктроники</label>
+        <label class="check"><input type="checkbox" value="Подогрев сидений" />Подогрев сидений</label>
+        <label class="check"><input type="checkbox" value="Кожаный салон" />Кожаный салон</label>
+        <label class="check"><input type="checkbox" value="Навигация" />Навигация</label>
+        <label class="check"><input type="checkbox" value="LED-фары" />LED-фары</label>
+        <label class="check"><input type="checkbox" value="Люк / панорама" />Люк / панорама</label>
+        <label class="check"><input type="checkbox" value="Бесключевой доступ" />Бесключевой доступ</label>
+      </div>
+      <label>
+        Доп. опции списком
+        <textarea name="equipment_extra" placeholder="Apple CarPlay, адаптивный круиз…"></textarea>
+      </label>
+    </section>
+
+    <section class="section">
+      <div class="section-title">Контакты</div>
+      <label>
+        Дополнительно
+        <textarea name="extra" placeholder="Можно на обмен, срочная продажа…"></textarea>
+      </label>
+      <label>
+        <span class="req">Телефон / WhatsApp</span>
+        <input type="tel" name="contacts" placeholder="+420 …" required />
+      </label>
+    </section>
+
+    <div class="submit-wrap">
+      <button type="submit" id="submit-btn">Отправить</button>
+      <p class="hint">Данные уйдут боту для модерации</p>
+    </div>
+  </form>
+
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      try {
+        tg.setHeaderColor("#0e1621");
+        tg.setBackgroundColor("#0e1621");
+      } catch (_) {}
+      document.documentElement.style.setProperty("--bg", tg.themeParams.bg_color || "#0e1621");
+      document.documentElement.style.setProperty("--text", tg.themeParams.text_color || "#f5f7fa");
+      document.documentElement.style.setProperty("--muted", tg.themeParams.hint_color || "#8b9aab");
+      document.documentElement.style.setProperty("--accent", tg.themeParams.button_color || "#2aabee");
+      document.documentElement.style.setProperty(
+        "--surface",
+        tg.themeParams.secondary_bg_color || "#17212b"
+      );
+    }
+
+    const form = document.getElementById("car-form");
+    const errorBox = document.getElementById("form-error");
+    const submitBtn = document.getElementById("submit-btn");
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.classList.add("show");
+      errorBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function clearError() {
+      errorBox.textContent = "";
+      errorBox.classList.remove("show");
+    }
+
+    function formatStk(value) {
+      if (!value) return "";
+      const [year, month] = value.split("-");
+      if (!year || !month) return value;
+      return month + "." + year;
+    }
+
+    function collectEquipment() {
+      const checked = Array.from(
+        document.querySelectorAll("#equipment-checks input[type=checkbox]:checked")
+      ).map((el) => el.value);
+      const extra = (form.equipment_extra.value || "").trim();
+      const parts = [...checked];
+      if (extra) parts.push(extra);
+      return parts.join(", ");
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      clearError();
+
+      if (!form.reportValidity()) {
+        showError("Заполните обязательные поля.");
+        return;
+      }
+
+      const data = {
+        brand_model: form.brand_model.value.trim(),
+        year: form.year.value.trim(),
+        price: form.price.value.trim(),
+        bargain: form.bargain.value,
+        location: form.location.value.trim(),
+        mileage: form.mileage.value.trim(),
+        engine: form.engine.value,
+        engine_mod: form.engine_mod.value.trim(),
+        power: form.power.value.trim(),
+        transmission: form.transmission.value,
+        drive: form.drive.value,
+        body: form.body.value,
+        color: form.color.value.trim(),
+        stk: formatStk(form.stk.value),
+        service: form.service.value.trim(),
+        condition: form.condition.value,
+        history: form.history.value.trim(),
+        equipment: collectEquipment(),
+        extra: form.extra.value.trim(),
+        contacts: form.contacts.value.trim(),
+      };
+
+      const payload = JSON.stringify(data);
+      if (payload.length > 4096) {
+        showError("Слишком много текста. Сократите комплектацию или описание.");
+        return;
+      }
+
+      if (!tg || typeof tg.sendData !== "function") {
+        showError("Откройте форму через кнопку в Telegram-боте.");
+        return;
+      }
+
+      submitBtn.disabled = true;
+      try {
+        tg.sendData(payload);
+      } catch (err) {
+        submitBtn.disabled = false;
+        showError("Не удалось отправить данные. Откройте Mini App через кнопку бота.");
+      }
+    });
+  </script>
+</body>
+</html>
